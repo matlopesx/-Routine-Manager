@@ -37,7 +37,7 @@ jobs:
           name=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]')
           echo "branch=$name"
 
-          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore|dev)[a-z0-9._-]+$'; then
+          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore|dev)/[a-z0-9._-]+$'; then
             echo "nome de branch válido"
             exit 0
           fi
