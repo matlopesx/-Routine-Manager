@@ -1,0 +1,290 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    paths:
+      - "estudos-platform/backend-platform/**"
+      - ".github/workflows/ci.yml"
+  push:
+    branches: [dev, main]
+    paths:
+      - "estudos-platform/backend-platform/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  branch-name:
+    name: branch-name
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR branch name
+        env:
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "Não é PR (push / dispatch) — skip da validação de nome"
+            exit 0
+          fi
+
+          name=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]')
+          echo "branch=$name"
+
+          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore)/[a-z0-9._-]+$'; then
+            echo "nome de branch válido"
+            exit 0
+          fi
+
+          echo "::error::Branch inválida: '$BRANCH'"
+          echo "Use: type/descricao-em-kebab-case"
+          echo "Tipos: feat/  feature/  hotfix/  fix/  bugfix/  bug/  ref/  refactor/  ci/  docs/  chore/"
+          echo "Exemplo: feat/vincular-artigo-trilha"
+          exit 1
+
+      - name: Validate PR title
+        env:
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "Não é PR — skip da validação de título"
+            exit 0
+          fi
+
+          echo "title=$TITLE"
+          # feat: texto  |  feat(escopo): texto  |  fix, bug, ref, ci, docs, chore
+          if echo "$TITLE" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore)(\([a-z0-9_-]+\))?: .+'; then
+            echo "título de PR válido"
+            exit 0
+          fi
+
+          echo "::error::Título de PR inválido: '$TITLE'"
+          echo "Use conventional commits: tipo: descrição"
+          echo "Tipos: feat:  fix:  bug:  ref:  ci:  docs:  chore:"
+          echo "Exemplo: feat: vincula artigo à trilha"
+          echo "Com escopo: feat(auth): persiste refresh no registro"
+          exit 1
+
+  review-context:
+    name: review-context
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: PR size + files for review
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "## Code review context" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**PR:** #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Branch:** \`${{ github.head_ref }}\` → \`${{ github.base_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          stats=$(git diff --shortstat "$BASE...$HEAD" -- estudos-platform/backend-platform || true)
+          files=$(git diff --name-only "$BASE...$HEAD" -- estudos-platform/backend-platform || true)
+          file_count=$(printf '%s\n' "$files" | sed '/^$/d' | wc -l | tr -d ' ')
+          additions=$(git diff --numstat "$BASE...$HEAD" -- estudos-platform/backend-platform | awk '{ a+=$1 } END { print a+0 }')
+          deletions=$(git diff --numstat "$BASE...$HEAD" -- estudos-platform/backend-platform | awk '{ d+=$2 } END { print d+0 }')
+
+          echo "**Diff:** +${additions} / −${deletions} em ${file_count} arquivo(s)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$stats" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$stats\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Arquivos alterados" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$file_count" = "0" ]; then
+            echo "_Nenhum arquivo em \`estudos-platform/backend-platform\`_" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' "$files" | sed '/^$/d' | sed 's/^/- `/;s/$/`/' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Guia rápido para o revisor (Thiago)
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Checklist do review" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [ ] Escopo do PR bate com o título/branch" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [ ] Sem secrets, tokens ou .env no diff" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [ ] Erros/edge cases tratados; logs sem PII" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [ ] Testes cobrem o caminho feliz e falha relevante" >> "$GITHUB_STEP_SUMMARY"
+          echo "- [ ] API/contratos: breaking change documentada?" >> "$GITHUB_STEP_SUMMARY"
+
+          # Alerta de PR grande (não falha o CI — só sinaliza)
+          total=$((additions + deletions))
+          if [ "$total" -gt 800 ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> ⚠️ Diff grande (${total} linhas). Prefira PRs menores para review com qualidade." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::PR grande: ${total} linhas alteradas. Considere dividir."
+          fi
+
+  lint:
+    name: lint
+    needs: branch-name
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Backend present?
+        id: backend
+        run: |
+          if [ -f estudos-platform/backend-platform/go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::estudos-platform/backend-platform ausente — skip lint"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.backend.outputs.present == 'true'
+        with:
+          go-version: "1.26.1"
+          cache-dependency-path: estudos-platform/backend-platform/go.sum
+
+      - name: go vet
+        if: steps.backend.outputs.present == 'true'
+        working-directory: estudos-platform/backend-platform
+        run: go vet ./...
+
+      - uses: golangci/golangci-lint-action@v8
+        if: steps.backend.outputs.present == 'true'
+        with:
+          version: latest
+          working-directory: estudos-platform/backend-platform
+          args: --timeout=5m
+
+  test:
+    name: test-coverage-build
+    needs: branch-name
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Backend present?
+        id: backend
+        run: |
+          if [ -f estudos-platform/backend-platform/go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::estudos-platform/backend-platform ausente — skip test/build"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.backend.outputs.present == 'true'
+        with:
+          go-version: "1.26.1"
+          cache-dependency-path: estudos-platform/backend-platform/go.sum
+
+      - name: Test + coverage
+        if: steps.backend.outputs.present == 'true'
+        working-directory: estudos-platform/backend-platform
+        run: go test ./internal/... -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Coverage gate (35%)
+        if: steps.backend.outputs.present == 'true'
+        working-directory: estudos-platform/backend-platform
+        run: |
+          pct=$(go tool cover -func=coverage.out | tail -n1 | awk '{print $3}' | tr -d '%')
+          echo "coverage=${pct}%"
+          echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "**${pct}%** (mínimo 35% — piso atual; subir quando houver mais testes)" >> "$GITHUB_STEP_SUMMARY"
+          awk -v p="$pct" 'BEGIN { exit (p+0 < 35) }'
+
+      - name: Build
+        if: steps.backend.outputs.present == 'true'
+        working-directory: estudos-platform/backend-platform
+        run: go build -o /tmp/api ./cmd/api
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.backend.outputs.present == 'true'
+        with:
+          name: coverage
+          path: estudos-platform/backend-platform/coverage.out
+          if-no-files-found: ignore
+
+  security:
+    name: security
+    needs: branch-name
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Backend present?
+        id: backend
+        run: |
+          if [ -f estudos-platform/backend-platform/go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::estudos-platform/backend-platform ausente — skip security"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.backend.outputs.present == 'true'
+        with:
+          go-version: "1.26.1"
+          cache-dependency-path: estudos-platform/backend-platform/go.sum
+
+      - name: govulncheck
+        if: steps.backend.outputs.present == 'true'
+        working-directory: estudos-platform/backend-platform
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # Job único para marcar como required check na branch protection
+  ci:
+    name: ci
+    if: always() && github.event.pull_request.draft != true
+    needs: [branch-name, review-context, lint, test, security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate
+        env:
+          EVENT: ${{ github.event_name }}
+          R_BRANCH: ${{ needs.branch-name.result }}
+          R_REVIEW: ${{ needs.review-context.result }}
+          R_LINT: ${{ needs.lint.result }}
+          R_TEST: ${{ needs.test.result }}
+          R_SEC: ${{ needs.security.result }}
+        run: |
+          echo "branch-name=$R_BRANCH"
+          echo "review-context=$R_REVIEW"
+          echo "lint=$R_LINT"
+          echo "test=$R_TEST"
+          echo "security=$R_SEC"
+
+          fail=0
+          [ "$R_BRANCH" = "failure" ] || [ "$R_BRANCH" = "cancelled" ] && fail=1
+          [ "$R_LINT" = "failure" ] || [ "$R_LINT" = "cancelled" ] && fail=1
+          [ "$R_TEST" = "failure" ] || [ "$R_TEST" = "cancelled" ] && fail=1
+          [ "$R_SEC" = "failure" ] || [ "$R_SEC" = "cancelled" ] && fail=1
+
+          # review-context só roda em PR; em push pode ser skipped
+          if [ "$EVENT" = "pull_request" ]; then
+            [ "$R_REVIEW" = "failure" ] || [ "$R_REVIEW" = "cancelled" ] && fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::CI falhou — não aprovar o PR até corrigir"
+            exit 1
+          fi
+
+          echo "CI OK — pronto para review/aprovação"
