@@ -37,14 +37,14 @@ jobs:
           name=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]')
           echo "branch=$name"
 
-          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore)/[a-z0-9._-]+$'; then
+          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore|dev)/[a-z0-9._-]+$'; then
             echo "nome de branch válido"
             exit 0
           fi
 
           echo "::error::Branch inválida: '$BRANCH'"
           echo "Use: type/descricao-em-kebab-case"
-          echo "Tipos: feat/  feature/  hotfix/  fix/  bugfix/  bug/  ref/  refactor/  ci/  docs/  chore/"
+          echo "Tipos: feat/  feature/  hotfix/  fix/  bugfix/  bug/  ref/  refactor/  ci/  docs/  chore/ dev/"
           echo "Exemplo: feat/add-habit-reminder"
           exit 1
 
