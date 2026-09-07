@@ -4,14 +4,8 @@ on:
   pull_request:
     branches: [dev, main]
     types: [opened, edited, synchronize, reopened, ready_for_review]
-    paths:
-      - "estudos-platform/backend-platform/**"
-      - ".github/workflows/ci.yml"
   push:
     branches: [dev, main]
-    paths:
-      - "estudos-platform/backend-platform/**"
-      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 concurrency:
@@ -48,7 +42,7 @@ jobs:
           echo "::error::Branch inválida: '$BRANCH'"
           echo "Use: type/descricao-em-kebab-case"
           echo "Tipos: feat/  feature/  hotfix/  fix/  bugfix/  bug/  ref/  refactor/  ci/  docs/  chore/"
-          echo "Exemplo: feat/vincular-artigo-trilha"
+          echo "Exemplo: feat/add-habit-reminder"
           exit 1
 
       - name: Validate PR title
@@ -71,7 +65,7 @@ jobs:
           echo "::error::Título de PR inválido: '$TITLE'"
           echo "Use conventional commits: tipo: descrição"
           echo "Tipos: feat:  fix:  bug:  ref:  ci:  docs:  chore:"
-          echo "Exemplo: feat: vincula artigo à trilha"
+          echo "Exemplo: feat: adiciona lembrete de hábito"
           echo "Com escopo: feat(auth): persiste refresh no registro"
           exit 1
 
@@ -95,11 +89,11 @@ jobs:
           echo "**Branch:** \`${{ github.head_ref }}\` → \`${{ github.base_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          stats=$(git diff --shortstat "$BASE...$HEAD" -- estudos-platform/backend-platform || true)
-          files=$(git diff --name-only "$BASE...$HEAD" -- estudos-platform/backend-platform || true)
+          stats=$(git diff --shortstat "$BASE...$HEAD" || true)
+          files=$(git diff --name-only "$BASE...$HEAD" || true)
           file_count=$(printf '%s\n' "$files" | sed '/^$/d' | wc -l | tr -d ' ')
-          additions=$(git diff --numstat "$BASE...$HEAD" -- estudos-platform/backend-platform | awk '{ a+=$1 } END { print a+0 }')
-          deletions=$(git diff --numstat "$BASE...$HEAD" -- estudos-platform/backend-platform | awk '{ d+=$2 } END { print d+0 }')
+          additions=$(git diff --numstat "$BASE...$HEAD" | awk '{ a+=$1 } END { print a+0 }')
+          deletions=$(git diff --numstat "$BASE...$HEAD" | awk '{ d+=$2 } END { print d+0 }')
 
           echo "**Diff:** +${additions} / −${deletions} em ${file_count} arquivo(s)" >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$stats" ]; then
@@ -109,12 +103,11 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Arquivos alterados" >> "$GITHUB_STEP_SUMMARY"
           if [ "$file_count" = "0" ]; then
-            echo "_Nenhum arquivo em \`estudos-platform/backend-platform\`_" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Nenhum arquivo alterado_" >> "$GITHUB_STEP_SUMMARY"
           else
             printf '%s\n' "$files" | sed '/^$/d' | sed 's/^/- `/;s/$/`/' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Guia rápido para o revisor (Thiago)
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Checklist do review" >> "$GITHUB_STEP_SUMMARY"
           echo "- [ ] Escopo do PR bate com o título/branch" >> "$GITHUB_STEP_SUMMARY"
@@ -123,7 +116,6 @@ jobs:
           echo "- [ ] Testes cobrem o caminho feliz e falha relevante" >> "$GITHUB_STEP_SUMMARY"
           echo "- [ ] API/contratos: breaking change documentada?" >> "$GITHUB_STEP_SUMMARY"
 
-          # Alerta de PR grande (não falha o CI — só sinaliza)
           total=$((additions + deletions))
           if [ "$total" -gt 800 ]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -139,32 +131,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Backend present?
-        id: backend
+      - name: Go module present?
+        id: go
         run: |
-          if [ -f estudos-platform/backend-platform/go.mod ]; then
+          if [ -f go.mod ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::estudos-platform/backend-platform ausente — skip lint"
+            echo "::warning::go.mod ausente na raiz — skip lint (adicione o módulo Go do Routine Manager)"
           fi
 
       - uses: actions/setup-go@v5
-        if: steps.backend.outputs.present == 'true'
+        if: steps.go.outputs.present == 'true'
         with:
           go-version: "1.26.1"
-          cache-dependency-path: estudos-platform/backend-platform/go.sum
+          cache-dependency-path: go.sum
 
       - name: go vet
-        if: steps.backend.outputs.present == 'true'
-        working-directory: estudos-platform/backend-platform
+        if: steps.go.outputs.present == 'true'
         run: go vet ./...
 
       - uses: golangci/golangci-lint-action@v8
-        if: steps.backend.outputs.present == 'true'
+        if: steps.go.outputs.present == 'true'
         with:
           version: latest
-          working-directory: estudos-platform/backend-platform
           args: --timeout=5m
 
   test:
@@ -175,30 +165,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Backend present?
-        id: backend
+      - name: Go module present?
+        id: go
         run: |
-          if [ -f estudos-platform/backend-platform/go.mod ]; then
+          if [ -f go.mod ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::estudos-platform/backend-platform ausente — skip test/build"
+            echo "::warning::go.mod ausente na raiz — skip test/build"
           fi
 
       - uses: actions/setup-go@v5
-        if: steps.backend.outputs.present == 'true'
+        if: steps.go.outputs.present == 'true'
         with:
           go-version: "1.26.1"
-          cache-dependency-path: estudos-platform/backend-platform/go.sum
+          cache-dependency-path: go.sum
 
       - name: Test + coverage
-        if: steps.backend.outputs.present == 'true'
-        working-directory: estudos-platform/backend-platform
-        run: go test ./internal/... -race -coverprofile=coverage.out -covermode=atomic
+        if: steps.go.outputs.present == 'true'
+        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
 
       - name: Coverage gate (35%)
-        if: steps.backend.outputs.present == 'true'
-        working-directory: estudos-platform/backend-platform
+        if: steps.go.outputs.present == 'true'
         run: |
           pct=$(go tool cover -func=coverage.out | tail -n1 | awk '{print $3}' | tr -d '%')
           echo "coverage=${pct}%"
@@ -207,15 +195,24 @@ jobs:
           awk -v p="$pct" 'BEGIN { exit (p+0 < 35) }'
 
       - name: Build
-        if: steps.backend.outputs.present == 'true'
-        working-directory: estudos-platform/backend-platform
-        run: go build -o /tmp/api ./cmd/api
+        if: steps.go.outputs.present == 'true'
+        run: |
+          if [ -d cmd ]; then
+            for d in cmd/*/; do
+              [ -d "$d" ] || continue
+              name=$(basename "$d")
+              echo "building ./cmd/$name"
+              go build -o "/tmp/$name" "./cmd/$name"
+            done
+          else
+            go build -o /tmp/app .
+          fi
 
       - uses: actions/upload-artifact@v4
-        if: always() && steps.backend.outputs.present == 'true'
+        if: always() && steps.go.outputs.present == 'true'
         with:
           name: coverage
-          path: estudos-platform/backend-platform/coverage.out
+          path: coverage.out
           if-no-files-found: ignore
 
   security:
@@ -226,25 +223,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Backend present?
-        id: backend
+      - name: Go module present?
+        id: go
         run: |
-          if [ -f estudos-platform/backend-platform/go.mod ]; then
+          if [ -f go.mod ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::estudos-platform/backend-platform ausente — skip security"
+            echo "::warning::go.mod ausente na raiz — skip security"
           fi
 
       - uses: actions/setup-go@v5
-        if: steps.backend.outputs.present == 'true'
+        if: steps.go.outputs.present == 'true'
         with:
           go-version: "1.26.1"
-          cache-dependency-path: estudos-platform/backend-platform/go.sum
+          cache-dependency-path: go.sum
 
       - name: govulncheck
-        if: steps.backend.outputs.present == 'true'
-        working-directory: estudos-platform/backend-platform
+        if: steps.go.outputs.present == 'true'
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
@@ -277,7 +273,6 @@ jobs:
           [ "$R_TEST" = "failure" ] || [ "$R_TEST" = "cancelled" ] && fail=1
           [ "$R_SEC" = "failure" ] || [ "$R_SEC" = "cancelled" ] && fail=1
 
-          # review-context só roda em PR; em push pode ser skipped
           if [ "$EVENT" = "pull_request" ]; then
             [ "$R_REVIEW" = "failure" ] || [ "$R_REVIEW" = "cancelled" ] && fail=1
           fi
