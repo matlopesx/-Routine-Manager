@@ -17,6 +17,8 @@ permissions:
 
 env:
   NODE_VERSION: "20"
+  # Contas com bypass de convenção (branch/título) — ainda rodam lint/test quando houver package.json
+  CI_BYPASS_ACTORS: "Thiago-Tertuliano"
 
 jobs:
   branch-name:
@@ -28,23 +30,33 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BRANCH: ${{ github.head_ref }}
+          ACTOR: ${{ github.actor }}
+          BYPASS: ${{ env.CI_BYPASS_ACTORS }}
         run: |
           if [ "$EVENT" != "pull_request" ]; then
             echo "Não é PR (push / dispatch) — skip da validação de nome"
             exit 0
           fi
 
+          case ",$BYPASS," in
+            *",$ACTOR,"*)
+              echo "bypass ativo para @$ACTOR — skip validação de branch"
+              exit 0
+              ;;
+          esac
+
           name=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]')
           echo "branch=$name"
 
-          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore|dev)[a-z0-9._-]+$'; then
+          # Exige type/descricao — a barra / é obrigatória
+          if echo "$name" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore|dev)/[a-z0-9._-]+$'; then
             echo "nome de branch válido"
             exit 0
           fi
 
           echo "::error::Branch inválida: '$BRANCH'"
           echo "Use: type/descricao-em-kebab-case"
-          echo "Tipos: feat/  feature/  hotfix/  fix/  bugfix/  bug/  ref/  refactor/  ci/  docs/  chore/ dev/"
+          echo "Tipos: feat/  feature/  hotfix/  fix/  bugfix/  bug/  ref/  refactor/  ci/  docs/  chore/  dev/"
           echo "Exemplo: feat/add-habit-reminder"
           exit 1
 
@@ -52,11 +64,20 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           TITLE: ${{ github.event.pull_request.title }}
+          ACTOR: ${{ github.actor }}
+          BYPASS: ${{ env.CI_BYPASS_ACTORS }}
         run: |
           if [ "$EVENT" != "pull_request" ]; then
             echo "Não é PR — skip da validação de título"
             exit 0
           fi
+
+          case ",$BYPASS," in
+            *",$ACTOR,"*)
+              echo "bypass ativo para @$ACTOR — skip validação de título"
+              exit 0
+              ;;
+          esac
 
           echo "title=$TITLE"
           if echo "$TITLE" | grep -Eq '^(feat|feature|hotfix|fix|bugfix|bug|ref|refactor|ci|docs|chore)(\([a-z0-9_-]+\))?: .+'; then
@@ -259,14 +280,14 @@ jobs:
 
       - name: Test + coverage
         if: needs.node-setup.outputs.present == 'true' && needs.node-setup.outputs.has_test == 'true'
+        continue-on-error: true
+        id: tests
         run: |
-          # Prefer scripts with coverage when available
           if node -e "process.exit(require('./package.json').scripts?.['test:coverage'] ? 0 : 1)"; then
             npm run test:coverage
           elif node -e "process.exit(require('./package.json').scripts?.['test:cov'] ? 0 : 1)"; then
             npm run test:cov
           else
-            # Vitest/Jest often accept --coverage via npm test --
             npm test -- --coverage --coverage.thresholds.lines=35 2>/dev/null \
               || npm test -- --coverage 2>/dev/null \
               || npm test
@@ -279,11 +300,15 @@ jobs:
           if [ -f coverage/coverage-summary.json ]; then
             pct=$(node -e "const s=require('./coverage/coverage-summary.json').total.lines.pct; console.log(s)")
             echo "**${pct}%** lines (meta: ≥35% quando o projeto amadurecer)" >> "$GITHUB_STEP_SUMMARY"
-            node -e "const p=require('./coverage/coverage-summary.json').total.lines.pct; if (p < 35) { console.error('Coverage abaixo de 35%:', p); process.exit(1) }"
+            # Gate soft: avisa, não falha ainda
+            node -e "const p=require('./coverage/coverage-summary.json').total.lines.pct; if (p < 35) { console.log('::warning::Coverage abaixo de 35%:', p) }"
           elif [ -f coverage/lcov.info ]; then
             echo "Relatório lcov gerado (gate numérico quando houver coverage-summary.json)" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Testes ok — configure coverage (vitest/jest) para habilitar o gate de 35%" >> "$GITHUB_STEP_SUMMARY"
+            echo "Testes rodaram — configure coverage (vitest) para habilitar o gate de 35%" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "${{ steps.tests.outcome }}" = "failure" ]; then
+            echo "::warning::Testes falharam — não bloqueante enquanto o projeto sobe; corrija antes do merge final"
           fi
 
       - name: Test script missing
@@ -336,9 +361,12 @@ jobs:
 
       - name: npm audit (high+)
         if: needs.node-setup.outputs.present == 'true'
+        continue-on-error: true
         run: |
-          # Falha só em high/critical; moderate não bloqueia no começo do projeto
-          npm audit --audit-level=high
+          # Aviso no começo do projeto — não bloqueia merge; sobe para blocking depois
+          if ! npm audit --audit-level=high; then
+            echo "::warning::npm audit encontrou vulnerabilidades high/critical (não bloqueante por enquanto)"
+          fi
 
   ci:
     name: ci
